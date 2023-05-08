@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/argoproj/argo-rollouts/utils/defaults"
 	"regexp"
 	"strings"
 	"time"
@@ -77,10 +78,10 @@ type EventRecorderAdapter struct {
 
 	eventf func(object runtime.Object, warn bool, opts EventOptions, messageFmt string, args ...interface{})
 	// apiFactory is a notifications engine API factory
-	apiFactory api.Factory
+	apiFactory api.MayFactory
 }
 
-func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.Factory) EventRecorder {
+func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.MayFactory) EventRecorder {
 	// Create event broadcaster
 	// Add argo-rollouts custom resources to the default Kubernetes Scheme so Events can be
 	// logged for argo-rollouts types.
@@ -107,7 +108,7 @@ type FakeEventRecorder struct {
 	Events []string
 }
 
-func NewFakeApiFactory() api.Factory {
+func NewFakeApiFactory() api.MayFactory {
 	var (
 		settings = api.Settings{ConfigMapName: "my-config-map", SecretName: "my-secret", InitGetVars: func(cfg *api.Config, configMap *corev1.ConfigMap, secret *corev1.Secret) (api.GetVars, error) {
 			return func(obj map[string]interface{}, dest services.Destination) map[string]interface{} {
@@ -235,6 +236,7 @@ func NewAPIFactorySettings() api.Settings {
 				return map[string]interface{}{"rollout": obj, "time": timeExprs}
 			}, nil
 		},
+		Namespace: defaults.Namespace(),
 	}
 }
 
@@ -248,7 +250,7 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		e.NotificationSendPerformance.WithLabelValues(namespace, name).Observe(duration.Seconds())
 		logCtx.WithField("time_ms", duration.Seconds()*1e3).Debug("Notification sent")
 	}()
-	notificationsAPI, err := e.apiFactory.GetAPI()
+	notificationsAPI, err := e.apiFactory.GetAPIWithNamespace(namespace)
 	if err != nil {
 		// don't return error if notifications are not configured and rollout has no subscribers
 		subsFromAnnotations := subscriptions.Annotations(object.(metav1.Object).GetAnnotations())

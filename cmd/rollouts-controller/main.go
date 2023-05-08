@@ -154,7 +154,7 @@ func newCommand() *cobra.Command {
 			controllerNamespaceInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(
 				kubeClient,
 				resyncDuration,
-				kubeinformers.WithNamespace(defaults.Namespace()))
+				kubeinformers.WithNamespace(metav1.NamespaceAll))
 			configMapInformer := controllerNamespaceInformerFactory.Core().V1().ConfigMaps()
 			secretInformer := controllerNamespaceInformerFactory.Core().V1().Secrets()
 
@@ -199,6 +199,7 @@ func newCommand() *cobra.Command {
 				controllerNamespaceInformerFactory,
 				jobInformerFactory)
 
+			electOpts.LeaderElect = false
 			if err = cm.Run(ctx, rolloutThreads, serviceThreads, ingressThreads, experimentThreads, analysisThreads, electOpts); err != nil {
 				log.Fatalf("Error running controller: %s", err.Error())
 			}

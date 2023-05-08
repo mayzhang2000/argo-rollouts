@@ -8,9 +8,7 @@ spec:
       analysis:
         templates:
         - templateName: web-background
-      steps:
-      - setWeight: 10
-      - pause: {}
+        startingStep: 1
   selector:
     matchLabels:
       app: rollout-background-analysis

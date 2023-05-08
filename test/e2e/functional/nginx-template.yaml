@@ -48,6 +48,8 @@ apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
   name: REPLACEME
+  annotations:
+    notifications.argoproj.io/subscribe.on-rollout-paused.slack: may-test
 spec:
   replicas: 4
   selector:
