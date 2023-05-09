@@ -78,10 +78,10 @@ type EventRecorderAdapter struct {
 
 	eventf func(object runtime.Object, warn bool, opts EventOptions, messageFmt string, args ...interface{})
 	// apiFactory is a notifications engine API factory
-	apiFactory api.MayFactory
+	apiFactory api.MayFactoryWithMultipleAPIs
 }
 
-func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.MayFactory) EventRecorder {
+func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.MayFactoryWithMultipleAPIs) EventRecorder {
 	// Create event broadcaster
 	// Add argo-rollouts custom resources to the default Kubernetes Scheme so Events can be
 	// logged for argo-rollouts types.
@@ -108,7 +108,7 @@ type FakeEventRecorder struct {
 	Events []string
 }
 
-func NewFakeApiFactory() api.MayFactory {
+func NewFakeApiFactory() api.MayFactoryWithMultipleAPIs {
 	var (
 		settings = api.Settings{ConfigMapName: "my-config-map", SecretName: "my-secret", InitGetVars: func(cfg *api.Config, configMap *corev1.ConfigMap, secret *corev1.Secret) (api.GetVars, error) {
 			return func(obj map[string]interface{}, dest services.Destination) map[string]interface{} {
@@ -250,7 +250,7 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		e.NotificationSendPerformance.WithLabelValues(namespace, name).Observe(duration.Seconds())
 		logCtx.WithField("time_ms", duration.Seconds()*1e3).Debug("Notification sent")
 	}()
-	notificationsAPI, err := e.apiFactory.GetAPIWithNamespace(namespace)
+	notificationsAPIs, err := e.apiFactory.GetAPIsWithNamespace("may")
 	if err != nil {
 		// don't return error if notifications are not configured and rollout has no subscribers
 		subsFromAnnotations := subscriptions.Annotations(object.(metav1.Object).GetAnnotations())
@@ -260,49 +260,56 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		}
 		return err
 	}
-	cfg := notificationsAPI.GetConfig()
-	destByTrigger := cfg.GetGlobalDestinations(object.(metav1.Object).GetLabels())
-	destByTrigger.Merge(subscriptions.NewAnnotations(object.(metav1.Object).GetAnnotations()).GetDestinations(cfg.DefaultTriggers, cfg.ServiceDefaultTriggers))
+	//may start
 	trigger := translateReasonToTrigger(opts.EventReason)
-	destinations := destByTrigger[trigger]
-	if len(destinations) == 0 {
-		logCtx.Debugf("No configured destinations for trigger: %s", trigger)
-		return nil
-	}
+	for namespace, notificationsAPI := range notificationsAPIs {
+		cfg := notificationsAPI.GetConfig()
+		destByTrigger := cfg.GetGlobalDestinations(object.(metav1.Object).GetLabels())
+		destByTrigger.Merge(subscriptions.NewAnnotations(object.(metav1.Object).GetAnnotations()).GetDestinations(cfg.DefaultTriggers, cfg.ServiceDefaultTriggers))
 
-	objMap, err := toObjectMap(object)
-	if err != nil {
-		return err
-	}
+		destinations := destByTrigger[trigger]
+		if len(destinations) == 0 {
+			logCtx.Debugf("No configured destinations for trigger: %s", trigger)
+			continue
+		}
 
-	emptyCondition := hash("")
-
-	for _, destination := range destinations {
-		res, err := notificationsAPI.RunTrigger(trigger, objMap)
+		objMap, err := toObjectMap(object)
 		if err != nil {
-			log.Errorf("Failed to execute condition of trigger %s: %v", trigger, err)
 			return err
 		}
-		log.Infof("Trigger %s result: %v", trigger, res)
 
-		for _, c := range res {
-			log.Infof("Res When Condition hash: %s, Templates: %s", c.Key, c.Templates)
-			s := strings.Split(c.Key, ".")[1]
-			if s != emptyCondition && c.Triggered == true {
-				err = notificationsAPI.Send(objMap, c.Templates, destination)
-				if err != nil {
-					log.Errorf("notification error: %s", err.Error())
-					return err
-				}
-			} else if s == emptyCondition {
-				err = notificationsAPI.Send(objMap, c.Templates, destination)
-				if err != nil {
-					log.Errorf("notification error: %s", err.Error())
-					return err
+		emptyCondition := hash("")
+
+		for _, destination := range destinations {
+			res, err := notificationsAPI.RunTrigger(trigger, objMap)
+			if err != nil {
+				log.Errorf("Failed to execute condition of trigger %s: %v", trigger, err)
+				continue
+			}
+			log.Infof("Trigger %s result: %v", trigger, res)
+
+			for _, c := range res {
+				log.Infof("Res When Condition hash: %s, Templates: %s", c.Key, c.Templates)
+				s := strings.Split(c.Key, ".")[1]
+				if s != emptyCondition && c.Triggered == true {
+					err = notificationsAPI.Send(objMap, c.Templates, destination)
+					if err != nil {
+						log.Errorf("notification error: %s for notification configuration in namespace %s", err.Error(), namespace)
+						continue
+					}
+				} else if s == emptyCondition {
+					err = notificationsAPI.Send(objMap, c.Templates, destination)
+					if err != nil {
+						log.Errorf("notification error: %s for notification configuration in namespace %s", err.Error(), namespace)
+						continue
+					}
 				}
 			}
+
 		}
 	}
+
+	//end of may
 
 	return nil
 }

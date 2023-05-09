@@ -50,6 +50,7 @@ metadata:
   name: REPLACEME
   annotations:
     notifications.argoproj.io/subscribe.on-rollout-paused.slack: may-test
+    notifications.argoproj.io/subscribe.on-rollout-paused.pagerdutyv2: hello-2_may4759196499290493255bad
 spec:
   replicas: 4
   selector:
