@@ -78,10 +78,10 @@ type EventRecorderAdapter struct {
 
 	eventf func(object runtime.Object, warn bool, opts EventOptions, messageFmt string, args ...interface{})
 	// apiFactory is a notifications engine API factory
-	apiFactory api.MayFactoryWithMultipleAPIs
+	apiFactory api.FactoryWithMultipleAPIs
 }
 
-func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.MayFactoryWithMultipleAPIs) EventRecorder {
+func NewEventRecorder(kubeclientset kubernetes.Interface, rolloutEventCounter *prometheus.CounterVec, notificationFailedCounter *prometheus.CounterVec, notificationSuccessCounter *prometheus.CounterVec, notificationSendPerformance *prometheus.HistogramVec, apiFactory api.FactoryWithMultipleAPIs) EventRecorder {
 	// Create event broadcaster
 	// Add argo-rollouts custom resources to the default Kubernetes Scheme so Events can be
 	// logged for argo-rollouts types.
@@ -108,7 +108,7 @@ type FakeEventRecorder struct {
 	Events []string
 }
 
-func NewFakeApiFactory() api.MayFactoryWithMultipleAPIs {
+func NewFakeApiFactory() api.FactoryWithMultipleAPIs {
 	var (
 		settings = api.Settings{ConfigMapName: "my-config-map", SecretName: "my-secret", InitGetVars: func(cfg *api.Config, configMap *corev1.ConfigMap, secret *corev1.Secret) (api.GetVars, error) {
 			return func(obj map[string]interface{}, dest services.Destination) map[string]interface{} {
