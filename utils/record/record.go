@@ -250,7 +250,7 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		e.NotificationSendPerformance.WithLabelValues(namespace, name).Observe(duration.Seconds())
 		logCtx.WithField("time_ms", duration.Seconds()*1e3).Debug("Notification sent")
 	}()
-	notificationsAPIs, err := e.apiFactory.GetAPIsWithNamespace("may")
+	notificationsAPIs, err := e.apiFactory.GetAPIsWithNamespace(namespace)
 	if err != nil {
 		// don't return error if notifications are not configured and rollout has no subscribers
 		subsFromAnnotations := subscriptions.Annotations(object.(metav1.Object).GetAnnotations())
@@ -261,8 +261,9 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		return err
 	}
 	//may start
+	log.Infof("notificationsAPIs=%s, rollout=%s, namespace=%s", notificationsAPIs, name, namespace)
 	trigger := translateReasonToTrigger(opts.EventReason)
-	for namespace, notificationsAPI := range notificationsAPIs {
+	for notification_namespace, notificationsAPI := range notificationsAPIs {
 		cfg := notificationsAPI.GetConfig()
 		destByTrigger := cfg.GetGlobalDestinations(object.(metav1.Object).GetLabels())
 		destByTrigger.Merge(subscriptions.NewAnnotations(object.(metav1.Object).GetAnnotations()).GetDestinations(cfg.DefaultTriggers, cfg.ServiceDefaultTriggers))
@@ -280,6 +281,7 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 
 		emptyCondition := hash("")
 
+		log.Infof("rollout=%s, namespace=%s, destinations=%s", name, namespace, destinations)
 		for _, destination := range destinations {
 			res, err := notificationsAPI.RunTrigger(trigger, objMap)
 			if err != nil {
@@ -294,13 +296,13 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 				if s != emptyCondition && c.Triggered == true {
 					err = notificationsAPI.Send(objMap, c.Templates, destination)
 					if err != nil {
-						log.Errorf("notification error: %s for notification configuration in namespace %s", err.Error(), namespace)
+						log.Errorf("notification error: %s for notification configuration in namespace %s. rollout=%s, namespace=%s", err.Error(), notification_namespace, name, namespace)
 						continue
 					}
 				} else if s == emptyCondition {
 					err = notificationsAPI.Send(objMap, c.Templates, destination)
 					if err != nil {
-						log.Errorf("notification error: %s for notification configuration in namespace %s", err.Error(), namespace)
+						log.Errorf("notification error: %s for notification configuration in namespace %s. rollout=%s, namespace=%s", err.Error(), notification_namespace, name, namespace)
 						continue
 					}
 				}
