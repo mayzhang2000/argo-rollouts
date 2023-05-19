@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/argoproj/argo-rollouts/utils/defaults"
 	"regexp"
 	"strings"
@@ -250,7 +251,7 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		e.NotificationSendPerformance.WithLabelValues(namespace, name).Observe(duration.Seconds())
 		logCtx.WithField("time_ms", duration.Seconds()*1e3).Debug("Notification sent")
 	}()
-	notificationsAPIs, err := e.apiFactory.GetAPIsWithNamespace(namespace)
+	notificationsAPIs, err := e.apiFactory.GetAPIsWithNamespaceV2(namespace)
 	if err != nil {
 		// don't return error if notifications are not configured and rollout has no subscribers
 		subsFromAnnotations := subscriptions.Annotations(object.(metav1.Object).GetAnnotations())
@@ -261,8 +262,16 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 		return err
 	}
 	//may start
-	log.Infof("notificationsAPIs=%s, rollout=%s, namespace=%s", notificationsAPIs, name, namespace)
 	trigger := translateReasonToTrigger(opts.EventReason)
+
+	objMap, err := toObjectMap(object)
+	if err != nil {
+		return err
+	}
+
+	// If there are errors from all notificationsAPIs, then we need to return error
+	notificationErrors := make(map[string]error)
+
 	for notification_namespace, notificationsAPI := range notificationsAPIs {
 		cfg := notificationsAPI.GetConfig()
 		destByTrigger := cfg.GetGlobalDestinations(object.(metav1.Object).GetLabels())
@@ -270,38 +279,35 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 
 		destinations := destByTrigger[trigger]
 		if len(destinations) == 0 {
-			logCtx.Debugf("No configured destinations for trigger: %s", trigger)
+			logCtx.Debugf("No configured destinations for trigger: %s using the configuration from namespace %s", trigger, notificationsAPI.GetConfig().Namespace)
 			continue
 		}
 
-		objMap, err := toObjectMap(object)
+		res, err := notificationsAPI.RunTrigger(trigger, objMap)
 		if err != nil {
-			return err
+			notificationErrors[notification_namespace] = err
+			log.Errorf("Failed to execute condition of trigger %s: %v", trigger, err)
+			continue
 		}
+		log.Infof("Trigger %s result: %v", trigger, res)
 
 		emptyCondition := hash("")
 
-		log.Infof("rollout=%s, namespace=%s, destinations=%s", name, namespace, destinations)
 		for _, destination := range destinations {
-			res, err := notificationsAPI.RunTrigger(trigger, objMap)
-			if err != nil {
-				log.Errorf("Failed to execute condition of trigger %s: %v", trigger, err)
-				continue
-			}
-			log.Infof("Trigger %s result: %v", trigger, res)
-
 			for _, c := range res {
 				log.Infof("Res When Condition hash: %s, Templates: %s", c.Key, c.Templates)
 				s := strings.Split(c.Key, ".")[1]
 				if s != emptyCondition && c.Triggered == true {
 					err = notificationsAPI.Send(objMap, c.Templates, destination)
 					if err != nil {
+						notificationErrors[notification_namespace] = err
 						log.Errorf("notification error: %s for notification configuration in namespace %s. rollout=%s, namespace=%s", err.Error(), notification_namespace, name, namespace)
 						continue
 					}
 				} else if s == emptyCondition {
 					err = notificationsAPI.Send(objMap, c.Templates, destination)
 					if err != nil {
+						notificationErrors[notification_namespace] = err
 						log.Errorf("notification error: %s for notification configuration in namespace %s. rollout=%s, namespace=%s", err.Error(), notification_namespace, name, namespace)
 						continue
 					}
@@ -309,11 +315,19 @@ func (e *EventRecorderAdapter) sendNotifications(object runtime.Object, opts Eve
 			}
 
 		}
-	}
+	} // iterate through all apis
 
+	//If all namespace has error, then return err
+	if len(notificationErrors) == 0 {
+		return nil
+	}
+	errorString := "Errors from SendNotification:"
+	for namespace, err := range notificationErrors {
+		errorString = errorString + " configuration in " + namespace + " error=" + err.Error()
+	}
 	//end of may
 
-	return nil
+	return fmt.Errorf(errorString)
 }
 
 // This function is copied over from notification engine to make sure we honour emptyCondition
